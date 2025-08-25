@@ -24,8 +24,8 @@ jobs:
         PLATFORM=espn
         LEAGUE_ID=${{ secrets.LEAGUE_ID }}
         SEASON=2024
-        CURRENT_NFL_WEEK=1
-        WEEK_FOR_REPORT=1
+        CURRENT_NFL_WEEK=auto
+        WEEK_FOR_REPORT=default
         NUM_PLAYOFF_SIMULATIONS=10000
         NUM_PLAYOFF_SLOTS=6
         NUM_PLAYOFF_SLOTS_PER_DIVISION=1
@@ -85,32 +85,37 @@ jobs:
         }
         EOF
     
-    - name: Pull Docker image
+    - name: Build Docker image
       run: |
-        docker pull ghcr.io/uberfastman/fantasy-football-metrics-weekly-report:latest
+        docker compose build
+    
+    - name: Start Docker container
+      run: |
+        docker compose up -d
+        # Wait for container to be ready
+        sleep 10
+        docker compose ps
     
     - name: Generate Report
       run: |
-        # Create output directories
-        mkdir -p output/reports output/data
+        # Run the report generation
+        docker exec fantasy-football-metrics-weekly-report-app-1 python main.py -d --save-data
         
-        # Run the container with the -d flag to use defaults
-        docker run \
-          -v $(pwd):/app \
-          -v $(pwd)/output:/app/output \
-          -v $(pwd)/auth:/app/auth \
-          --env-file .env \
-          ghcr.io/uberfastman/fantasy-football-metrics-weekly-report:latest \
-          python main.py -d --save-data
+        # Copy report from container to host
+        docker cp fantasy-football-metrics-weekly-report-app-1:/app/output/reports ./output_reports
         
         # List generated reports
-        ls -la output/reports/
+        ls -la output_reports/
+    
+    - name: Stop Docker container
+      run: |
+        docker compose down
         
     - name: Get report details
       id: report
       run: |
         # Get the generated PDF filename
-        REPORT_FILE=$(ls output/reports/*.pdf | head -n 1)
+        REPORT_FILE=$(ls output_reports/*.pdf | head -n 1)
         echo "file=$REPORT_FILE" >> $GITHUB_OUTPUT
         echo "filename=$(basename $REPORT_FILE)" >> $GITHUB_OUTPUT
         
