@@ -1,0 +1,150 @@
+name: Weekly Fantasy Football Report
+
+on:
+  schedule:
+    # Runs at 9 AM ET every Tuesday
+    - cron: '0 13 * * 2'  # 9 AM EDT (adjust for EST in winter)
+  workflow_dispatch:  # Manual trigger for testing
+
+jobs:
+  generate-and-email-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Create .env file
+      run: |
+        cat > .env << EOF
+        LOG_LEVEL=info
+        DATA_DIR_LOCAL_PATH=output/data
+        OUTPUT_DIR_LOCAL_PATH=output/reports
+        PLATFORM=espn
+        LEAGUE_ID=${{ secrets.LEAGUE_ID }}
+        SEASON=2024
+        CURRENT_NFL_WEEK=1
+        WEEK_FOR_REPORT=1
+        NUM_PLAYOFF_SIMULATIONS=10000
+        NUM_PLAYOFF_SLOTS=6
+        NUM_PLAYOFF_SLOTS_PER_DIVISION=1
+        NUM_REGULAR_SEASON_WEEKS=14
+        
+        # ESPN Settings
+        ESPN_USERNAME=${{ secrets.ESPN_USERNAME }}
+        ESPN_PASSWORD=${{ secrets.ESPN_PASSWORD }}
+        ESPN_COOKIE_SWID=${{ secrets.ESPN_COOKIE_SWID }}
+        ESPN_COOKIE_ESPN_S2=${{ secrets.ESPN_COOKIE_ESPN_S2 }}
+        ESPN_AUTH_DIR_LOCAL_PATH=auth/espn
+        
+        # Report Settings
+        LEAGUE_STANDINGS_BOOL=True
+        LEAGUE_PLAYOFF_PROBS_BOOL=True
+        LEAGUE_MEDIAN_STANDINGS_BOOL=True
+        LEAGUE_POWER_RANKINGS_BOOL=True
+        LEAGUE_Z_SCORE_RANKINGS_BOOL=True
+        LEAGUE_SCORE_RANKINGS_BOOL=True
+        LEAGUE_COACHING_EFFICIENCY_RANKINGS_BOOL=True
+        LEAGUE_LUCK_RANKINGS_BOOL=True
+        LEAGUE_OPTIMAL_SCORE_RANKINGS_BOOL=True
+        LEAGUE_BAD_BOY_RANKINGS_BOOL=True
+        LEAGUE_BEEF_RANKINGS_BOOL=True
+        LEAGUE_WEEKLY_TOP_SCORERS_BOOL=True
+        LEAGUE_WEEKLY_HIGHEST_CE_BOOL=True
+        REPORT_TIME_SERIES_CHARTS_BOOL=True
+        REPORT_TEAM_STATS_BOOL=True
+        TEAM_POINTS_BY_POSITION_CHARTS_BOOL=True
+        TEAM_BAD_BOY_STATS_BOOL=True
+        TEAM_BEEF_STATS_BOOL=True
+        TEAM_BOOM_OR_BUST_BOOL=True
+        
+        # Formatting
+        FONT=helvetica
+        FONT_SIZE=12
+        IMAGE_QUALITY=75
+        MAX_DATA_CHARS=24
+        
+        # Integrations (all false for GitHub Actions)
+        GOOGLE_DRIVE_UPLOAD_BOOL=False
+        SLACK_POST_BOOL=False
+        CHECK_FOR_UPDATES=False
+        EOF
+        
+    - name: Create private.json for ESPN auth
+      run: |
+        mkdir -p auth/espn
+        cat > auth/espn/private.json << EOF
+        {
+          "username": "${{ secrets.ESPN_USERNAME }}",
+          "password": "${{ secrets.ESPN_PASSWORD }}",
+          "chrome_user_data_dir": "/tmp/chrome_user_data",
+          "chrome_user_profile": "Default",
+          "swid": "${{ secrets.ESPN_COOKIE_SWID }}",
+          "espn_s2": "${{ secrets.ESPN_COOKIE_ESPN_S2 }}"
+        }
+        EOF
+    
+    - name: Pull Docker image
+      run: |
+        docker pull ghcr.io/uberfastman/fantasy-football-metrics-weekly-report:latest
+    
+    - name: Generate Report
+      run: |
+        # Create output directories
+        mkdir -p output/reports output/data
+        
+        # Run the container with the -d flag to use defaults
+        docker run \
+          -v $(pwd):/app \
+          -v $(pwd)/output:/app/output \
+          -v $(pwd)/auth:/app/auth \
+          --env-file .env \
+          ghcr.io/uberfastman/fantasy-football-metrics-weekly-report:latest \
+          python main.py -d --save-data
+        
+        # List generated reports
+        ls -la output/reports/
+        
+    - name: Get report details
+      id: report
+      run: |
+        # Get the generated PDF filename
+        REPORT_FILE=$(ls output/reports/*.pdf | head -n 1)
+        echo "file=$REPORT_FILE" >> $GITHUB_OUTPUT
+        echo "filename=$(basename $REPORT_FILE)" >> $GITHUB_OUTPUT
+        
+        # Calculate approximate NFL week
+        SEASON_START="2024-09-05"
+        DAYS_SINCE=$(( ($(date +%s) - $(date -d "$SEASON_START" +%s)) / 86400 ))
+        WEEK=$(( ($DAYS_SINCE / 7) + 1 ))
+        echo "week=$WEEK" >> $GITHUB_OUTPUT
+        echo "date=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+        
+    - name: Upload Report as Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: fantasy-report-${{ steps.report.outputs.date }}
+        path: ${{ steps.report.outputs.file }}
+        retention-days: 90
+        
+    - name: Send Email with Report
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 465
+        secure: true
+        username: ${{ secrets.EMAIL_ADDRESS }}
+        password: ${{ secrets.EMAIL_PASSWORD }}
+        subject: Fantasy Football Report - Week ${{ steps.report.outputs.week }}
+        to: ${{ secrets.EMAIL_ADDRESS }}
+        from: Fantasy Football Report Bot
+        body: |
+          Your weekly fantasy football report is ready!
+          
+          League: ESPN League ${{ secrets.LEAGUE_ID }}
+          Generated: ${{ steps.report.outputs.date }}
+          Estimated Week: ${{ steps.report.outputs.week }}
+          
+          The PDF report is attached to this email.
+        attachments: ${{ steps.report.outputs.file }}
