@@ -122,7 +122,7 @@ jobs:
         echo "date=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
         
     - name: Upload Report as Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: fantasy-report-${{ steps.report.outputs.date }}
         path: ${{ steps.report.outputs.file }}
